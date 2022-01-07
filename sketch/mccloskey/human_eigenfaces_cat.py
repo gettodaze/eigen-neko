@@ -17,73 +17,116 @@ from sklearn import decomposition
 
 from core import utils
 
-N_SAMPLES = 100
 # %%
+
+
+class PCAResult(tp.NamedTuple):
+    mean: np.ndarray
+    centered_data: np.ndarray
+    U: np.ndarray
+    S: np.ndarray
+    Vt: np.ndarray
+
+
+N_SAMPLES = 500
 # """It helps visualising the portraits from the dataset."""
 def plot_portraits(images, titles, shape, n_row, n_col):
     plt.figure(figsize=(2.2 * n_col, 2.2 * n_row))
     plt.subplots_adjust(bottom=0, left=0.01, right=0.99, top=0.90, hspace=0.20)
     for i in range(n_row * n_col):
         plt.subplot(n_row, n_col, i + 1)
-        plt.imshow(images[i].reshape(shape))
+        plt.imshow(images[i].reshape(shape), cmap="gray")
         plt.title(titles[i])
         plt.xticks(())
         plt.yticks(())
 
 
-def gen_image_arrays(files: tp.Iterable[utils.AnnotatedImage], output_shape=(64, 64)):
+def gen_images(
+    files: tp.Iterable[utils.AnnotatedImage],
+    output_shape=(64, 64),
+    gray=True,
+    crop=True,
+) -> tp.Iterable[Image.Image]:
     for file in files:
         image = Image.open(file.image)
-        grayscale = ImageOps.grayscale(image)
-        min_pt, max_pt = utils.Point.to_min_max(file.points)
 
-        yield np.array(
-            image.crop((min_pt.x, min_pt.y, max_pt.x, max_pt.y)).resize(output_shape)
-        )
+        if gray:
+            image = ImageOps.grayscale(image)
+
+        if crop:
+            min_pt, max_pt = utils.Point.to_min_max(file.points)
+            image = image.crop((min_pt.x, min_pt.y, max_pt.x, max_pt.y))
+
+        if output_shape:
+            image = image.resize(output_shape)
+
+        yield image
 
 
-files = list(utils.Paths.gen_files())
-names = [f.image.stem for f in files[:N_SAMPLES]]
-cropped_images = list(gen_image_arrays(files[:N_SAMPLES]))
-shape = cropped_images[0].shape
-X_train = np.array([im.flatten() for im in cropped_images])
-plot_portraits(X_train, names, shape, n_row=4, n_col=4)
-
-# %%
-def pca(X, n_pc):
-    n_samples, n_features = X.shape
+def pca(X) -> PCAResult:
     mean = np.mean(X, axis=0)
     centered_data = X - mean
-    U, S, V = np.linalg.svd(centered_data)
-    components = V[:n_pc]
-    projected = U[:, :n_pc] * S[:n_pc]
+    U, S, Vt = np.linalg.svd(centered_data, full_matrices=False)
 
-    return projected, components, mean, centered_data
+    return PCAResult(mean=mean, centered_data=centered_data, U=U, S=S, Vt=Vt)
 
 
-def expand_components(arr: np.ndarray):
-    ret = arr
+def pca_from_components(pca_result: PCAResult, key_or_slice: int | slice):
+    principle_compoents = pca_result.U[:, key_or_slice] * pca_result.S[key_or_slice]
+    principle_directions = pca_result.V[key_or_slice]
+
+    return (principle_compoents @ principle_directions) + pca_result.mean
+
+
+def dilate_components(arr: np.ndarray) -> np.ndarray:
+    ret = arr.copy()
     ret -= ret.min()
     ret /= ret.max()
     return ret
 
 
-n_components = 50
-P, C, M, Y = pca(X_train, n_pc=n_components)
-eigenfaces = np.array([expand_components(arr) for arr in C])
+def reconstruction(pca_result: PCAResult, shape, image_index):
+    n_samples, n_features = pca_result.centered_data.shape
+    weights = np.dot(pca_result.centered_data, pca_result.components)
+    centered_vector = np.dot(weights[image_index, :], pca_result.components)
+    recovered_image = (pca_result.mean + centered_vector).reshape(shape)
+    return recovered_image
+
+
+# %% Gather Images
+
+files = list(utils.Paths.gen_files())
+images = list(gen_images(files[:N_SAMPLES]))
+names = [f.image.stem for f in files[:N_SAMPLES]]
+shape = np.array(images[0]).shape
+
+X_train = np.array([np.array(im).flatten() for im in images])
+
+plot_portraits(X_train, names, shape, n_row=4, n_col=4)
+
+
+# %% Run PCA
+
+n_components = 100
+pca_result = pca(X_train)
+# columns of Vt (rows of V) are the principle directions
+eigenfaces = np.array([dilate_components(arr) for arr in pca_result.Vt])
 eigenface_titles = ["eigenface %d" % i for i in range(eigenfaces.shape[0])]
 plot_portraits(eigenfaces, eigenface_titles, shape, 4, 4)
 
 # %%
-def reconstruction(Y, C, M, shape, image_index):
-    n_samples, n_features = Y.shape
-    weights = np.dot(Y, C.T)
-    centered_vector = np.dot(weights[image_index, :], C)
-    recovered_image = (M + centered_vector).reshape(shape)
-    return recovered_image
+# Add progressive compoents
+gradual_pca = [
+    pca_from_components(pca_result, slice(0, i + 1, None)) for i in range(16)
+]
+gradual_pca_i = lambda i: [arr[i] for arr in gradual_pca]
+plot_portraits(gradual_pca[2], names, shape, n_row=4, n_col=4)
 
 
-recovered_images = [reconstruction(Y, C, M, shape, i) for i in range(N_SAMPLES)]
+# %% Construct
+
+
+recovered_images = [reconstruction(pca_result, shape, i) for i in range(N_SAMPLES)]
 plot_portraits(recovered_images, names, shape, n_row=4, n_col=4)
 
 # %%
