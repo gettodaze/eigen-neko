@@ -1,5 +1,7 @@
 # From https://towardsdatascience.com/eigenfaces-recovering-humans-from-ghosts-17606c328184
 # %%
+from __future__ import annotations
+
 from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
@@ -73,7 +75,7 @@ def pca(X) -> PCAResult:
 
 def pca_from_components(pca_result: PCAResult, key_or_slice: int | slice):
     principle_compoents = pca_result.U[:, key_or_slice] * pca_result.S[key_or_slice]
-    principle_directions = pca_result.V[key_or_slice]
+    principle_directions = pca_result.Vt[key_or_slice]
 
     return (principle_compoents @ principle_directions) + pca_result.mean
 
@@ -85,10 +87,11 @@ def dilate_components(arr: np.ndarray) -> np.ndarray:
     return ret
 
 
-def reconstruction(pca_result: PCAResult, shape, image_index):
+def reconstruction(pca_result: PCAResult, shape, image_index, n_pc):
+    components = pca_result.Vt[:n_pc]
     n_samples, n_features = pca_result.centered_data.shape
-    weights = np.dot(pca_result.centered_data, pca_result.components)
-    centered_vector = np.dot(weights[image_index, :], pca_result.components)
+    weights = np.dot(pca_result.centered_data, components)
+    centered_vector = np.dot(weights[image_index, :], components)
     recovered_image = (pca_result.mean + centered_vector).reshape(shape)
     return recovered_image
 
@@ -126,7 +129,9 @@ plot_portraits(gradual_pca[2], names, shape, n_row=4, n_col=4)
 # %% Construct
 
 
-recovered_images = [reconstruction(pca_result, shape, i) for i in range(N_SAMPLES)]
+recovered_images = [
+    reconstruction(pca_result, shape, i, n_components) for i in range(N_SAMPLES)
+]
 plot_portraits(recovered_images, names, shape, n_row=4, n_col=4)
 
 # %%
